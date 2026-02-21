@@ -1,4 +1,4 @@
-# pr-bouncer
+# 🚪 pr-bouncer
 
 Automated PR security review powered by Gemini AI, Semgrep, Gitleaks, and Checkov.
 
@@ -8,9 +8,11 @@ Three static analysis tools scan your code. Gemini evaluates the findings, check
 
 ## Why pr-bouncer?
 
-Most AI-powered PR review tools fall into one of two camps: commercial platforms with per-seat pricing (Aikido, Snyk, Semgrep Pro), or lightweight open-source actions that send diffs to an LLM and post the response — essentially AI wrappers with no static analysis grounding and a general code quality focus rather than a security focus.
+Most development teams don't have the resources to do dedicated security reviews on every pull request. Unless you're in a heavily regulated industry, security review is either skipped entirely or becomes a bottleneck where one overloaded person gates every merge. The reality is that most code ships without any security eyes on it.
 
-pr-bouncer sits in the gap. It combines **three established static analysis tools** (Semgrep, Gitleaks, Checkov) with **AI-powered evaluation** that cross-validates each finding against the actual code. The static tools catch what pattern matching is good at — known vulnerability signatures, leaked secrets, infrastructure misconfigurations. The AI layer then evaluates whether each finding is real or a false positive, checks for logic bugs the tools miss, and produces a structured review with a composite risk score.
+A little automation goes a long way. But AI-only review is unreliable — LLMs hallucinate vulnerabilities and miss real ones. Static analysis tools are consistent and deterministic but noisy with false positives. pr-bouncer combines both: **static tools provide a grounded, reproducible baseline**, and the **AI evaluates whether each finding is real**, adds context the tools can't see, and catches logic bugs that pattern matching misses.
+
+Most existing tools fall into one of two camps: commercial platforms with per-seat pricing (Aikido, Snyk, Semgrep Pro), or lightweight open-source actions that send diffs to an LLM and post the response — essentially AI wrappers with no static analysis grounding and a general code quality focus rather than a security focus. pr-bouncer sits in the gap — free, self-hosted, security-focused, and grounded in real tool output.
 
 **Why Gemini?** Security reviews need context. A meaningful review requires the diff, full file contents of changed files, AST structure, security configurations, base class sources, and cross-references to where changed functions are called. This easily reaches 50,000–100,000+ tokens for non-trivial PRs. Gemini's large context window (1M+ tokens) handles this without truncation or chunking, which means the AI sees the complete picture rather than reviewing code fragments in isolation.
 
@@ -41,7 +43,7 @@ pr-bouncer needs API keys passed as GitHub secrets. You can set these at **eithe
 
 | Secret | Required | Description |
 |---|---|---|
-| `GEMINI_API_KEY` | Yes | Google Gemini API key |
+| `GEMINI_API_KEY` | ✅ Yes | Google Gemini API key |
 | `AWS_ACCESS_KEY_ID` | Only if using S3 upload | AWS access key |
 | `AWS_SECRET_ACCESS_KEY` | Only if using S3 upload | AWS secret key |
 | `AWS_REGION` | Only if using S3 upload | AWS region (e.g. `us-east-1`) |
