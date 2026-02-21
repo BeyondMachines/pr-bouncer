@@ -1,8 +1,18 @@
-# 🚪 pr-bouncer
+# pr-bouncer
 
 Automated PR security review powered by Gemini AI, Semgrep, Gitleaks, and Checkov.
 
 Three static analysis tools scan your code. Gemini evaluates the findings, checks for false positives, and posts a structured security review as a PR comment. A configurable security gate blocks risky merges.
+
+---
+
+## Why pr-bouncer?
+
+Most AI-powered PR review tools fall into one of two camps: commercial platforms with per-seat pricing (Aikido, Snyk, Semgrep Pro), or lightweight open-source actions that send diffs to an LLM and post the response — essentially AI wrappers with no static analysis grounding and a general code quality focus rather than a security focus.
+
+pr-bouncer sits in the gap. It combines **three established static analysis tools** (Semgrep, Gitleaks, Checkov) with **AI-powered evaluation** that cross-validates each finding against the actual code. The static tools catch what pattern matching is good at — known vulnerability signatures, leaked secrets, infrastructure misconfigurations. The AI layer then evaluates whether each finding is real or a false positive, checks for logic bugs the tools miss, and produces a structured review with a composite risk score.
+
+**Why Gemini?** Security reviews need context. A meaningful review requires the diff, full file contents of changed files, AST structure, security configurations, base class sources, and cross-references to where changed functions are called. This easily reaches 50,000–100,000+ tokens for non-trivial PRs. Gemini's large context window (1M+ tokens) handles this without truncation or chunking, which means the AI sees the complete picture rather than reviewing code fragments in isolation.
 
 ---
 
@@ -22,20 +32,21 @@ PR Opened → Semgrep + Gitleaks + Checkov → Gemini AI Review → PR Comment +
 
 ## Quick Start
 
-### 1. Ensure org secrets are configured
+### 1. Configure secrets
 
-The following secrets should already be set at the org level. If you don't have access or they're missing, contact your platform/security team.
+pr-bouncer needs API keys passed as GitHub secrets. You can set these at **either** level depending on your setup:
+
+- **Organization level** (recommended for multiple repos) — Go to **GitHub → Your Org → Settings → Secrets and variables → Actions**. Set visibility to "Selected repositories" and grant access to repos that use pr-bouncer. All granted repos share the same secrets.
+- **Repository level** (for single repos or per-repo keys) — Go to **Repo → Settings → Secrets and variables → Actions**. These override org-level secrets of the same name.
 
 | Secret | Required | Description |
 |---|---|---|
-| `GEMINI_API_KEY` | ✅ Yes | Google Gemini API key |
+| `GEMINI_API_KEY` | Yes | Google Gemini API key |
 | `AWS_ACCESS_KEY_ID` | Only if using S3 upload | AWS access key |
 | `AWS_SECRET_ACCESS_KEY` | Only if using S3 upload | AWS secret key |
 | `AWS_REGION` | Only if using S3 upload | AWS region (e.g. `us-east-1`) |
 
 > **Note:** `GITHUB_TOKEN` is provided automatically by GitHub Actions — you don't need to configure it.
-
-Your repo must be granted access to these org secrets. Go to **GitHub → Your Org → Settings → Secrets and variables → Actions** and check that your repo is in the "Selected repositories" list for each secret.
 
 ### 2. Add the workflow to your repo
 
@@ -155,6 +166,50 @@ The risk score is a **composite** of the static tool findings and the AI evaluat
 
 ---
 
+## S3 Review Storage
+
+When `upload_to_s3: true`, pr-bouncer stores review data in S3 for long-term analysis. The purpose is to build an organizational dataset that a separate reporting tool can use to identify trends over time: which vulnerability types appear most often, which repos have recurring issues, whether the AI is consistently agreeing or disagreeing with static tools (signaling false positive/negative patterns), and where targeted developer training would have the most impact.
+
+### What gets saved
+
+The upload behavior depends on the **composite risk score**:
+
+**Risk score ≥ 5 — Full review saved:**
+- Complete AI review including all critical issues, finding evaluations, recommendations, and breaking changes
+- PR metadata (repo, PR number, author, branch, SHA, timestamp)
+- Token usage statistics
+
+These are the reviews most likely to contain real findings worth analyzing.
+
+**Risk score < 5 — Summary only:**
+- Risk score, one-line summary, counts of critical issues and recommendations
+- PR metadata and token usage
+
+Low-risk reviews are saved in condensed form to reduce storage costs while still tracking that a review occurred and what the score was.
+
+**Token usage — always logged:**
+- Every review (regardless of risk score) appends a row to a monthly CSV with timestamp, repo, PR number, risk score, and token counts
+- Used for monitoring API costs across repos
+
+### S3 bucket structure
+
+```
+bm-pr-reviews/
+├── reviews/
+│   └── YYYY/
+│       └── MM/
+│           └── DD/
+│               ├── org__repo__PR-42__a1b2c3d4.json            # risk ≥ 5: full review
+│               └── org__repo__PR-43__e5f6g7h8__summary.json   # risk < 5: summary only
+└── tokens/
+    └── YYYY/
+        └── MM.csv    # monthly token usage (one row per review)
+```
+
+The `tokens/` CSVs have columns: `timestamp, repo, pr, risk_score, prompt_tokens, completion_tokens, cached_tokens, total_tokens`.
+
+---
+
 ## Per-Repo Customization Examples
 
 **Strict security for a production API:**
@@ -202,7 +257,7 @@ The composite score may be elevated by static tool findings even if the AI downg
 Ensure `GITHUB_TOKEN` has `pull-requests: write` permission. This is set in the reusable workflow's `permissions` block, but org-level policies can override it.
 
 **S3 upload fails silently**
-The upload step only runs when `upload_to_s3: true` AND `review-result.json` exists. Check that AWS secrets are set at the org level and granted to your repo.
+The upload step only runs when `upload_to_s3: true` AND `review-result.json` exists. Check that AWS secrets are set at the org level or repo level and granted to your repo.
 
 **Secrets not available**
-If the workflow fails with missing secrets, your repo may not be in the "Selected repositories" list for the org secrets. Contact your platform team or check org settings.
+If the workflow fails with missing secrets, your repo may not be in the "Selected repositories" list for the org secrets, or the repo-level secrets haven't been configured. Check org settings or add secrets directly to the repo.
