@@ -1,0 +1,27 @@
+name: 'PR Security Review'
+description: 'Automated PR security review using Semgrep, Gitleaks, Checkov, and Gemini AI'
+author: 'BeyondMachines'
+
+branding:
+  icon: 'shield'
+  color: 'red'
+
+inputs:
+  risk_threshold:
+    description: 'Risk score threshold to block PRs (1-10)'
+    required: false
+    default: '7'
+  semgrep_rules:
+    description: 'Semgrep rule sets (comma-separated)'
+    required: false
+    default: 'p/security-audit,p/owasp-top-ten'
+  upload_to_s3:
+    description: 'Upload review results to S3'
+    required: false
+    default: 'true'
+
+runs:
+  using: 'composite'
+  steps:
+    - run: echo "Use the reusable workflow instead. See README.md"
+      shell: bash

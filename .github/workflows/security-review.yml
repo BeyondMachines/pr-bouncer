@@ -1,0 +1,206 @@
+# This is the REUSABLE workflow that lives in the central action repo.
+
+name: PR Security Review
+
+on:
+  workflow_call:
+    inputs:
+      risk_threshold:
+        description: 'Risk score threshold to fail the gate (default 7)'
+        required: false
+        type: number
+        default: 7
+      semgrep_rules:
+        description: 'Semgrep rule sets (comma-separated)'
+        required: false
+        type: string
+        default: 'p/security-audit,p/owasp-top-ten'
+      upload_to_s3:
+        description: 'Whether to upload results to S3'
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      GEMINI_API_KEY:
+        required: true
+      AWS_ACCESS_KEY_ID:
+        required: false
+      AWS_SECRET_ACCESS_KEY:
+        required: false
+      AWS_REGION:
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: write
+  security-events: write
+
+jobs:
+  security-analysis:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout calling repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout PR branch
+        run: |
+          git fetch origin pull/${{ github.event.pull_request.number }}/head:pr-branch
+          git checkout pr-branch
+
+      # Checkout the action repo to get the scripts
+      - name: Checkout pr-bouncer scripts
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/pr-bouncer
+          path: .pr-bouncer
+          ref: v1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r .pr-bouncer/requirements.txt
+          wget -q https://github.com/gitleaks/gitleaks/releases/download/v8.30.0/gitleaks_8.30.0_linux_x64.tar.gz
+          tar -xzf gitleaks_8.30.0_linux_x64.tar.gz
+          sudo mv gitleaks /usr/local/bin/
+
+      - name: Get PR diff and changed files
+        run: |
+          git diff -U15 origin/${{ github.base_ref }}...HEAD > pr-diff.txt
+          git diff --name-only origin/${{ github.base_ref }}...HEAD > changed-files.txt
+
+      - name: Run security scans
+        env:
+          SEMGREP_RULES: ${{ inputs.semgrep_rules }}
+        run: python .pr-bouncer/scripts/run_security_scans.py
+
+      - name: Run Gemini PR Review
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO_NAME: ${{ github.repository }}
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: python .pr-bouncer/scripts/gemini_pr_reviewer.py
+
+      - name: Security Gate
+        if: always()
+        env:
+          RISK_THRESHOLD: ${{ inputs.risk_threshold }}
+        run: |
+          if [ ! -f review-result.json ]; then
+            echo "No review result found, failing as precaution"
+            exit 1
+          fi
+
+          SCORE=$(python3 -c "import json; print(json.load(open('review-result.json'))['risk_score'])")
+          CRITICAL=$(python3 -c "import json; print(len(json.load(open('review-result.json')).get('critical_issues', [])))")
+
+          echo "Risk score: $SCORE/10 (threshold: $RISK_THRESHOLD)"
+          echo "Critical issues: $CRITICAL"
+
+          if [ "$SCORE" -ge "$RISK_THRESHOLD" ] || [ "$CRITICAL" -gt 0 ]; then
+            echo "❌ Security gate FAILED — PR is blocked"
+            exit 1
+          else
+            echo "✅ Security gate passed"
+          fi
+
+      - name: Upload review to S3
+        if: always() && inputs.upload_to_s3 && hashFiles('review-result.json') != ''
+        env:
+          REPO_NAME: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          python3 << 'EOF'
+          import json, boto3, os
+          from datetime import datetime, timezone
+
+          now = datetime.now(timezone.utc)
+          repo = os.environ.get('REPO_NAME', 'unknown').replace('/', '__')
+          pr = os.environ.get('PR_NUMBER', '0')
+          sha = os.environ.get('GITHUB_SHA', 'unknown')[:8]
+          bucket = 'bm-pr-reviews'
+
+          with open('review-result.json') as f:
+              review = json.load(f)
+
+          risk = review.get('risk_score', 0)
+
+          envelope = {
+              'metadata': {
+                  'repo': os.environ.get('REPO_NAME'),
+                  'pr_number': int(pr),
+                  'sha': os.environ.get('GITHUB_SHA', ''),
+                  'branch': os.environ.get('HEAD_REF', ''),
+                  'base_branch': os.environ.get('BASE_REF', ''),
+                  'author': review.get('_pr_author', ''),
+                  'timestamp': now.isoformat(),
+                  'run_id': os.environ.get('GITHUB_RUN_ID', ''),
+                  'token_usage': review.pop('_token_usage', {}),
+                  'prompt_length_chars': review.pop('_prompt_length_chars', 0),
+              },
+              'review': review,
+          }
+
+          s3 = boto3.client('s3')
+          key = f"reviews/{now.year}/{now.month:02d}/{now.day:02d}/{repo}__PR-{pr}__{sha}.json"
+
+          if risk >= 5:
+              s3.put_object(
+                  Bucket=bucket, Key=key,
+                  Body=json.dumps(envelope, indent=2),
+                  ContentType='application/json'
+              )
+              print(f"Uploaded full review: {key}")
+          else:
+              summary_envelope = {
+                  'metadata': envelope['metadata'],
+                  'review_summary': {
+                      'risk_score': risk,
+                      'summary': review.get('summary', ''),
+                      'critical_count': len(review.get('critical_issues', [])),
+                      'recommendation_count': len(review.get('recommendations', [])),
+                  }
+              }
+              key = key.replace('.json', '__summary.json')
+              s3.put_object(
+                  Bucket=bucket, Key=key,
+                  Body=json.dumps(summary_envelope, indent=2),
+                  ContentType='application/json'
+              )
+              print(f"Uploaded summary only: {key}")
+
+          usage = envelope['metadata']['token_usage']
+          csv_key = f"tokens/{now.year}/{now.month:02d}.csv"
+          row = f"{now.isoformat()},{repo},{pr},{risk},{usage.get('prompt_tokens',0)},{usage.get('completion_tokens',0)},{usage.get('cached_tokens',0)},{usage.get('total_tokens',0)}\n"
+
+          try:
+              existing = s3.get_object(Bucket=bucket, Key=csv_key)['Body'].read().decode()
+              if not existing.endswith('\n'):
+                  existing += '\n'
+          except s3.exceptions.NoSuchKey:
+              existing = "timestamp,repo,pr,risk_score,prompt_tokens,completion_tokens,cached_tokens,total_tokens\n"
+
+          s3.put_object(Bucket=bucket, Key=csv_key, Body=existing + row, ContentType='text/csv')
+          print(f"Token usage logged")
+          EOF
+
+      - name: Cleanup action checkout
+        if: always()
+        run: rm -rf .pr-bouncer
