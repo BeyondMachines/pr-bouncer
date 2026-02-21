@@ -1,4 +1,4 @@
-# pr-bouncer
+# 🚪 pr-bouncer
 
 Automated PR security review powered by Gemini AI, Semgrep, Gitleaks, and Checkov.
 
@@ -28,7 +28,7 @@ The following secrets should already be set at the org level. If you don't have 
 
 | Secret | Required | Description |
 |---|---|---|
-| `GEMINI_API_KEY` | Yes | Google Gemini API key |
+| `GEMINI_API_KEY` | ✅ Yes | Google Gemini API key |
 | `AWS_ACCESS_KEY_ID` | Only if using S3 upload | AWS access key |
 | `AWS_SECRET_ACCESS_KEY` | Only if using S3 upload | AWS secret key |
 | `AWS_REGION` | Only if using S3 upload | AWS region (e.g. `us-east-1`) |
@@ -43,6 +43,8 @@ Create a single file in your repo:
 
 **`.github/workflows/security-review.yml`**
 
+#### Minimal setup (all defaults)
+
 ```yaml
 name: PR Security Review
 
@@ -56,6 +58,27 @@ jobs:
     secrets:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 ```
+
+#### Public repos — block fork PRs
+
+If your repo is public, anyone can open a PR from a fork and trigger the workflow, consuming API credits. Add the `if:` condition to restrict reviews to PRs from branches within your repo only:
+
+```yaml
+name: PR Security Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  security-review:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    uses: BeyondMachines/pr-bouncer/.github/workflows/security-review.yml@v1
+    secrets:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+```
+
+Private repos don't need this — only people with repo access can open PRs.
 
 That's it. The next PR opened in your repo will trigger the review.
 
@@ -88,11 +111,13 @@ on:
 
 jobs:
   security-review:
+    # Optional: uncomment the next line for public repos to block fork PRs
+    # if: github.event.pull_request.head.repo.full_name == github.repository
     uses: BeyondMachines/pr-bouncer/.github/workflows/security-review.yml@v1
     with:
-      risk_threshold: 5
-      semgrep_rules: "p/security-audit,p/owasp-top-ten,p/python"
-      upload_to_s3: true
+      risk_threshold: 5           # Block PRs at risk score >= 5 (default: 7)
+      semgrep_rules: "p/security-audit,p/owasp-top-ten,p/python"  # Extra rules
+      upload_to_s3: true          # Store results in S3 (default: false)
     secrets:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -134,22 +159,23 @@ The risk score is a **composite** of the static tool findings and the AI evaluat
 
 **Strict security for a production API:**
 ```yaml
-with:
-  risk_threshold: 3
-  semgrep_rules: "p/security-audit,p/owasp-top-ten,p/python,p/django"
-  upload_to_s3: true
+    uses: BeyondMachines/pr-bouncer/.github/workflows/security-review.yml@v1
+    with:
+      risk_threshold: 3
+      semgrep_rules: "p/security-audit,p/owasp-top-ten,p/python,p/django"
+      upload_to_s3: true
 ```
 
 **Relaxed for an internal tool:**
 ```yaml
-with:
-  risk_threshold: 8
+    with:
+      risk_threshold: 8
 ```
 
 **Frontend repo with JS-specific rules:**
 ```yaml
-with:
-  semgrep_rules: "p/security-audit,p/owasp-top-ten,p/javascript,p/react"
+    with:
+      semgrep_rules: "p/security-audit,p/owasp-top-ten,p/javascript,p/react"
 ```
 
 ---
