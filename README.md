@@ -1,6 +1,6 @@
-# 🚪 pr-bouncer
+# pr-bouncer by BeyondMachines
 
-Automated PR security review powered by Gemini AI, Semgrep, Gitleaks, and Checkov.
+Automated PR security review powered by Semgrep, Gitleaks, and Checkov and reviewed by Gemini AI
 
 Three static analysis tools scan your code. Gemini evaluates the findings, checks for false positives, and posts a structured security review as a PR comment. A configurable security gate blocks risky merges.
 

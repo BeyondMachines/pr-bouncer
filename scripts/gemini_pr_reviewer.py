@@ -1018,9 +1018,9 @@ Be thorough on critical_issues — list every confirmed vulnerability. Be concis
         raw += "\n</details>\n\n"
 
         # --- Assemble ---
-        header = f"## 🤖 Gemini Security Review\n\n**Scan Results:** {total_issues} total findings from Semgrep, Gitleaks, and Checkov\n\n"
+        header = f"## BeyondMachines PR Bouncer Security Review\n\n**Scan Results:** {total_issues} total findings from Semgrep, Gitleaks, and Checkov\n\n"
         ai_review = self.format_review_markdown(review)
-        footer = f"\n---\n<sub>🔍 Automated security review powered by Gemini AI | " \
+        footer = f"\n---\n<sub>🔍 Automated security review powered by static tools, AST and Gemini AI | " \
                  f"[View scan artifacts](https://github.com/{self.repo_name}/actions/runs/" \
                  f"{os.environ.get('GITHUB_RUN_ID', '')})</sub>\n"
 
