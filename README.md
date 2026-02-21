@@ -1,4 +1,4 @@
-# 🚪 pr-bouncer
+# pr-bouncer
 
 Automated PR security review powered by Gemini AI, Semgrep, Gitleaks, and Checkov.
 
@@ -28,7 +28,7 @@ The following secrets should already be set at the org level. If you don't have 
 
 | Secret | Required | Description |
 |---|---|---|
-| `GEMINI_API_KEY` | ✅ Yes | Google Gemini API key |
+| `GEMINI_API_KEY` | Yes | Google Gemini API key |
 | `AWS_ACCESS_KEY_ID` | Only if using S3 upload | AWS access key |
 | `AWS_SECRET_ACCESS_KEY` | Only if using S3 upload | AWS secret key |
 | `AWS_REGION` | Only if using S3 upload | AWS region (e.g. `us-east-1`) |
