@@ -10,7 +10,9 @@ Three static analysis tools scan your code. Gemini evaluates the findings, check
 
 Most development teams don't have the resources to do dedicated security reviews on every pull request. Unless you're in a heavily regulated industry, security review is either skipped entirely or becomes a bottleneck where one overloaded person gates every merge. The reality is that most code ships without any security eyes on it.
 
-A little automation goes a long way. But AI-only review is unreliable — LLMs hallucinate vulnerabilities and miss real ones. Static analysis tools are consistent and deterministic but noisy with false positives. pr-bouncer combines both: **static tools provide a grounded, reproducible baseline**, and the **AI evaluates whether each finding is real**, adds context the tools can't see, and catches logic bugs that pattern matching misses.
+![pr-bouncer](images/bouncer.jpg)
+
+A little automation goes a long way. But AI-only review is unreliable: LLMs hallucinate vulnerabilities and miss real ones. Static analysis tools are consistent and deterministic but noisy with false positives. pr-bouncer combines both: **static tools provide a grounded, reproducible baseline**, and the **AI evaluates whether each finding is real**, adds context the tools can't see, and catches logic bugs that pattern matching misses.
 
 Most existing tools fall into one of two camps: commercial platforms with per-seat pricing (Aikido, Snyk, Semgrep Pro), or lightweight open-source actions that send diffs to an LLM and post the response — essentially AI wrappers with no static analysis grounding and a general code quality focus rather than a security focus. pr-bouncer sits in the gap — free, self-hosted, security-focused, and grounded in real tool output.
 
