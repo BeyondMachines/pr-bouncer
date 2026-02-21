@@ -52,7 +52,7 @@ on:
 
 jobs:
   security-review:
-    uses: your-org/pr-bouncer/.github/workflows/security-review.yml@v1
+    uses: BeyondMachines/pr-bouncer/.github/workflows/security-review.yml@v1
     secrets:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 ```
@@ -88,7 +88,7 @@ on:
 
 jobs:
   security-review:
-    uses: your-org/pr-bouncer/.github/workflows/security-review.yml@v1
+    uses: BeyondMachines/pr-bouncer/.github/workflows/security-review.yml@v1
     with:
       risk_threshold: 5
       semgrep_rules: "p/security-audit,p/owasp-top-ten,p/python"
