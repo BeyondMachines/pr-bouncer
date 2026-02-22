@@ -52,7 +52,7 @@ pr-bouncer needs API keys passed as GitHub secrets. You can set these at **eithe
 
 > **Note:** `GITHUB_TOKEN` is provided automatically by GitHub Actions — you don't need to configure it.
 
-### 2. Add the workflow to your repo
+### 2. Add the security review workflow
 
 Create a single file in your repo:
 
@@ -97,17 +97,54 @@ Private repos don't need this — only people with repo access can open PRs.
 
 That's it. The next PR opened in your repo will trigger the review.
 
-### 3. (Optional) Make it a required check
+### 3. (Optional) Add slash commands
+
+pr-bouncer posts action commands at the bottom of every review comment. To enable them, add a second workflow file:
+
+**`.github/workflows/pr-bouncer-commands.yml`**
+
+```yaml
+name: PR Bouncer Commands
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  commands:
+    uses: BeyondMachines/pr-bouncer/.github/workflows/pr-commands.yml@v1
+    with:
+      upload_to_s3: true    # save decisions to S3 (default: false)
+    secrets:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+```
+
+This enables two commands that developers can use directly in PR comments:
+
+| Command | What it does |
+|---|---|
+| `/accept-risk` | Overrides the security gate, marks the PR as risk-accepted, adds a label |
+| `/false-positive` | Flags the review as inaccurate, adds a label for tracking |
+
+Developers add their reasoning after the command, e.g.: `/accept-risk This is a test environment, no real credentials exposed`
+
+The command, author, and reasoning are recorded in the PR comment thread. If `upload_to_s3` is enabled, decisions are also saved to S3 for organizational tracking.
+
+### 4. (Optional) Make it a required check
 
 To block merges when the security gate fails, go to **Repo → Settings → Branches → Branch protection rules** for your default branch and add `security-analysis` as a required status check.
+
+When combined with slash commands, developers can unblock a failed gate by commenting `/accept-risk` with their reasoning — the command overrides the status check while maintaining a full audit trail.
 
 ---
 
 ## Configuration Reference
 
-### Inputs
+### Inputs — Security Review
 
-Set these per-repo in the `with:` block of your caller workflow.
+Set these per-repo in the `with:` block of your security review workflow.
 
 | Input | Type | Default | Description |
 |---|---|---|---|
@@ -115,9 +152,18 @@ Set these per-repo in the `with:` block of your caller workflow.
 | `semgrep_rules` | string | `p/security-audit,p/owasp-top-ten` | Comma-separated Semgrep rule sets. Add language-specific packs as needed. |
 | `upload_to_s3` | boolean | `false` | Upload review results to S3. Requires AWS secrets. |
 
+### Inputs — Slash Commands
+
+Set these in the `with:` block of your commands workflow.
+
+| Input | Type | Default | Description |
+|---|---|---|---|
+| `upload_to_s3` | boolean | `false` | Save accept-risk and false-positive decisions to S3. |
+
 ### Full example with all options
 
 ```yaml
+# .github/workflows/security-review.yml
 name: PR Security Review
 
 on:
@@ -130,11 +176,30 @@ jobs:
     # if: github.event.pull_request.head.repo.full_name == github.repository
     uses: BeyondMachines/pr-bouncer/.github/workflows/security-review.yml@v1
     with:
-      risk_threshold: 5           # Block PRs at risk score >= 5 (default: 7)
-      semgrep_rules: "p/security-audit,p/owasp-top-ten,p/python"  # Extra rules
-      upload_to_s3: true          # Store results in S3 (default: false)
+      risk_threshold: 5
+      semgrep_rules: "p/security-audit,p/owasp-top-ten,p/python"
+      upload_to_s3: true
     secrets:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+```
+
+```yaml
+# .github/workflows/pr-bouncer-commands.yml
+name: PR Bouncer Commands
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  commands:
+    uses: BeyondMachines/pr-bouncer/.github/workflows/pr-commands.yml@v1
+    with:
+      upload_to_s3: true
+    secrets:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_REGION: ${{ secrets.AWS_REGION }}
@@ -152,6 +217,7 @@ pr-bouncer posts a single comment on each PR with:
 - **Breaking Changes** — database migrations, removed endpoints, changed API signatures
 - **Recommendations** — top 3 actionable security improvements
 - **Raw Tool Findings** — collapsible section with all Semgrep, Gitleaks, and Checkov results
+- **Actions** — slash commands for developers to accept risk or flag false positives
 
 ---
 
@@ -168,6 +234,8 @@ The risk score is a **composite** of the static tool findings and the AI evaluat
 - If tools flag something but AI identifies it as a false positive → dampened score
 - If AI finds something tools missed → AI score is used
 
+If slash commands are enabled, a developer can override a failed gate by commenting `/accept-risk` with their reasoning. This sets the status check to passing while recording who accepted the risk and why.
+
 ---
 
 ## S3 Review Storage
@@ -176,24 +244,16 @@ When `upload_to_s3: true`, pr-bouncer stores review data in S3 for long-term ana
 
 ### What gets saved
 
-The upload behavior depends on the **composite risk score**:
+**Reviews** — saved by the security review workflow:
 
-**Risk score ≥ 5 — Full review saved:**
-- Complete AI review including all critical issues, finding evaluations, recommendations, and breaking changes
-- PR metadata (repo, PR number, author, branch, SHA, timestamp)
-- Token usage statistics
+| Condition | What's saved |
+|---|---|
+| Risk score ≥ 5 | Full review: all critical issues, finding evaluations, recommendations, breaking changes, PR metadata, token usage |
+| Risk score < 5 | Summary only: risk score, one-line summary, issue/recommendation counts, PR metadata, token usage |
 
-These are the reviews most likely to contain real findings worth analyzing.
+**Token usage** — always logged regardless of risk score. Every review appends a row to a monthly CSV for monitoring API costs across repos.
 
-**Risk score < 5 — Summary only:**
-- Risk score, one-line summary, counts of critical issues and recommendations
-- PR metadata and token usage
-
-Low-risk reviews are saved in condensed form to reduce storage costs while still tracking that a review occurred and what the score was.
-
-**Token usage — always logged:**
-- Every review (regardless of risk score) appends a row to a monthly CSV with timestamp, repo, PR number, risk score, and token counts
-- Used for monitoring API costs across repos
+**Decisions** — saved by the commands workflow when a developer uses `/accept-risk` or `/false-positive`. Each decision records the command, author, reasoning, timestamp, repo, and PR number. A monthly CSV is also maintained for quick querying.
 
 ### S3 bucket structure
 
@@ -205,12 +265,23 @@ bm-pr-reviews/
 │           └── DD/
 │               ├── org__repo__PR-42__a1b2c3d4.json            # risk ≥ 5: full review
 │               └── org__repo__PR-43__e5f6g7h8__summary.json   # risk < 5: summary only
+├── decisions/
+│   └── YYYY/
+│       └── MM/
+│           └── DD/
+│               ├── org__repo__PR-42__accept-risk__username.json
+│               └── org__repo__PR-43__false-positive__username.json
+│       └── MM.csv    # monthly decisions log
 └── tokens/
     └── YYYY/
         └── MM.csv    # monthly token usage (one row per review)
 ```
 
 The `tokens/` CSVs have columns: `timestamp, repo, pr, risk_score, prompt_tokens, completion_tokens, cached_tokens, total_tokens`.
+
+The `decisions/` CSVs have columns: `timestamp, repo, pr, decision, author, reasoning`.
+
+Reviews and decisions share the same repo/PR naming convention, so a reporting tool can join them to see how often findings are accepted vs fixed vs disputed.
 
 ---
 
@@ -259,6 +330,12 @@ The composite score may be elevated by static tool findings even if the AI downg
 
 **Review comment not appearing**
 Ensure `GITHUB_TOKEN` has `pull-requests: write` permission. This is set in the reusable workflow's `permissions` block, but org-level policies can override it.
+
+**Slash commands not working**
+Make sure you've added the second workflow file (`.github/workflows/pr-bouncer-commands.yml`) to the repo. The commands workflow triggers on `issue_comment`, which is a separate event from `pull_request` — it needs its own workflow file.
+
+**`/accept-risk` doesn't unblock the PR**
+The command sets a status check called `security-analysis` to passing. If your branch protection uses a different check name, the override won't match. Verify the required check name in your branch protection rules.
 
 **S3 upload fails silently**
 The upload step only runs when `upload_to_s3: true` AND `review-result.json` exists. Check that AWS secrets are set at the org level or repo level and granted to your repo.

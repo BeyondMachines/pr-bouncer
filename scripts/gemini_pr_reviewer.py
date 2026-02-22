@@ -934,6 +934,16 @@ Be thorough on critical_issues — list every confirmed vulnerability. Be concis
                 priority = rec.get('priority', 'MEDIUM')
                 icon = {"HIGH": "🔥", "MEDIUM": "⚡", "LOW": "ℹ️"}.get(priority, "ℹ️")
                 md += f"{icon} **[{priority}]** {rec.get('suggestion', '')}\n\n"
+        
+        md += "\n---\n"
+        md += "### Actions\n\n"
+        md += "| | Command | What it does |\n"
+        md += "|---|---|---|\n"
+        md += "| ✅ | `/accept-risk` | Accept findings and unblock the PR |\n"
+        md += "| ⚠️ | `/false-positive` | Flag this review as inaccurate |\n"
+        md += "\n"
+        md += "Add your reasoning as a comment after the command, e.g.:\n"
+        md += "`/accept-risk This is a test environment, no real credentials exposed`\n"
 
         return md
 
