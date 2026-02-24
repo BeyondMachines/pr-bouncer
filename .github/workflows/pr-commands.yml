@@ -44,7 +44,7 @@ jobs:
 
           if echo "$COMMENT_BODY" | grep -q "/accept-risk"; then
             COMMAND="accept-risk"
-            REASONING=$(echo "$COMMENT_BODY" | sed 's|/accept-risk||' | xargs)
+            REASONING=$(echo "$COMMENT_BODY" | sed 's|/accept-risk||' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
 
             gh pr comment "$PR_NUMBER" --repo "$REPO" \
               --body "✅ **Risk accepted** by @${COMMENT_AUTHOR}.
@@ -56,7 +56,7 @@ jobs:
             SHA=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefOid -q .headRefOid)
             gh api repos/$REPO/statuses/$SHA \
               -f state=success \
-              -f context="security-analysis" \
+              -f context="pr-bouncer-analysis" \
               -f description="Risk accepted by $COMMENT_AUTHOR"
 
             gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "pr-bouncer:risk-accepted"
@@ -64,7 +64,7 @@ jobs:
 
           if echo "$COMMENT_BODY" | grep -q "/false-positive"; then
             COMMAND="false-positive"
-            REASONING=$(echo "$COMMENT_BODY" | sed 's|/false-positive||' | xargs)
+            REASONING=$(echo "$COMMENT_BODY" | sed 's|/false-positive||' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
 
             gh pr comment "$PR_NUMBER" --repo "$REPO" \
               --body "📝 **False positive flagged** by @${COMMENT_AUTHOR}.
