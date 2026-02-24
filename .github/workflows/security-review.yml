@@ -122,7 +122,7 @@ jobs:
             echo "✅ Security gate passed"
           fi
 
-      - name: Post commit status
+      - name: Post commit status as pr-bouncer-analysis for automation
         if: always()
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -139,7 +139,7 @@ jobs:
             --method POST \
             -H "Authorization: Bearer $GITHUB_TOKEN" \
             -f state="$STATE" \
-            -f context="security-analysis" \
+            -f context="pr-bouncer-analysis" \
             -f description="Security gate ${STATE} (risk score: ${SCORE}/10)"
 
       - name: Upload review to S3
