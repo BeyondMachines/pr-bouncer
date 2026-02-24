@@ -112,6 +112,9 @@ on:
 
 jobs:
   commands:
+    if: >
+      github.event.issue.pull_request &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
     uses: BeyondMachines/pr-bouncer/.github/workflows/pr-commands.yml@v1
     with:
       upload_to_s3: true    # save decisions to S3 (default: false)
@@ -120,6 +123,8 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_REGION: ${{ secrets.AWS_REGION }}
 ```
+
+The `if:` condition ensures only PR comments from repo owners, org members, or collaborators trigger the workflow. This prevents unauthorized users from executing slash commands or accessing AWS secrets.
 
 This enables two commands that developers can use directly in PR comments:
 
@@ -196,6 +201,9 @@ on:
 
 jobs:
   commands:
+    if: >
+      github.event.issue.pull_request &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
     uses: BeyondMachines/pr-bouncer/.github/workflows/pr-commands.yml@v1
     with:
       upload_to_s3: true

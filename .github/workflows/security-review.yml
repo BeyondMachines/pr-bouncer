@@ -98,6 +98,7 @@ jobs:
         run: python .pr-bouncer/scripts/gemini_pr_reviewer.py
 
       - name: Security Gate
+        id: gate
         if: always()
         env:
           RISK_THRESHOLD: ${{ inputs.risk_threshold }}
@@ -119,6 +120,19 @@ jobs:
           else
             echo "✅ Security gate passed"
           fi
+
+      - name: Post commit status
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RESULT="${{ steps.gate.outcome }}"   # 'success' or 'failure'
+          STATE=$([ "$RESULT" = "success" ] && echo "success" || echo "failure")
+          SHA="${{ github.event.pull_request.head.sha }}"
+          gh api repos/${{ github.repository }}/statuses/$SHA \
+            -f state="$STATE" \
+            -f context="security-analysis" \
+            -f description="Security gate: $STATE"
 
       - name: Upload review to S3
         if: always() && inputs.upload_to_s3 && hashFiles('review-result.json') != ''
