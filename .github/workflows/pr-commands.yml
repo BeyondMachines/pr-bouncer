@@ -59,7 +59,6 @@ jobs:
               -f context="pr-bouncer-analysis" \
               -f description="Risk accepted by $COMMENT_AUTHOR"
 
-            gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "pr-bouncer:risk-accepted"
           fi
 
           if echo "$COMMENT_BODY" | grep -q "/false-positive"; then
@@ -71,9 +70,13 @@ jobs:
           
           **Reason:** ${REASONING:-No reason provided.}
           
-          This has been recorded for review."
+          The security gate has been overridden for this PR."
 
-            gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "pr-bouncer:false-positive"
+            SHA=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefOid -q .headRefOid)
+            gh api repos/$REPO/statuses/$SHA \
+              -f state=success \
+              -f context="pr-bouncer-analysis" \
+              -f description="False positive flagged by $COMMENT_AUTHOR"
           fi
 
           echo "command=$COMMAND" >> "$GITHUB_OUTPUT"

@@ -139,7 +139,7 @@ The command, author, and reasoning are recorded in the PR comment thread. If `up
 
 ### 4. (Optional) Make it a required check
 
-To block merges when the security gate fails, go to **Repo → Settings → Branches → Branch protection rules** for your default branch and add `security-analysis` as a required status check.
+To block merges when the security gate fails, go to **Repo → Settings → Branches → Branch protection rules** for your default branch and add `pr-bouncer-analysis` as a required status check
 
 When combined with slash commands, developers can unblock a failed gate by commenting `/accept-risk` with their reasoning — the command overrides the status check while maintaining a full audit trail.
 
@@ -246,6 +246,80 @@ If slash commands are enabled, a developer can override a failed gate by comment
 
 ---
 
+## Automation Integration
+
+pr-bouncer posts two signals on every PR, serving different consumers:
+
+**GitHub Actions check run** — `security-review / security-analysis`
+This is the standard Actions job result. It appears in the PR merge box, links to the workflow log, and is what human reviewers interact with. It cannot be read via API on free GitHub organization plans (the Check Runs API requires a paid plan).
+
+**Commit status** — `pr-bouncer-analysis`
+This is an explicit status posted by pr-bouncer at the end of every run. It is readable via the standard Statuses API on all GitHub plans, including free organizations. This is the signal intended for any automation that needs to know whether the security gate passed or failed.
+
+The two signals inisially always agree — the commit status reflects the outcome of the Actions gate step.
+
+### Reading the gate result from automation
+
+Poll the Statuses API for the HEAD commit of the PR branch:
+
+```
+GET /repos/{owner}/{repo}/commits/{sha}/statuses
+```
+
+Look for the entry where `context` is `pr-bouncer-analysis`. The `state` field will be:
+
+| State | Meaning |
+|---|---|
+| `success` | Security gate passed — PR is safe to merge |
+| `failure` | Security gate failed — critical issues or risk score too high |
+| `pending` | Review is still running |
+
+The `description` field contains the risk score for quick reference, e.g. `Security gate failure (risk score: 7/10)`.
+
+#### Example — polling from a script
+
+```python
+import requests
+
+def get_pr_bouncer_status(owner, repo, sha, token):
+    """
+    Returns 'passed', 'failed', 'pending', or 'unknown'.
+    Works on all GitHub plans including free orgs.
+    """
+    url = f"https://api.github.com/repos/{owner}/{repo}/commits/{sha}/statuses"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+    }
+    resp = requests.get(url, headers=headers)
+    resp.raise_for_status()
+
+    for status in resp.json():
+        if status.get("context") == "pr-bouncer-analysis":
+            state = status["state"]
+            if state == "success":             return "passed"
+            if state in ("failure", "error"):  return "failed"
+            return "pending"
+
+    return "unknown"  # review hasn't run yet
+```
+
+#### Example — waiting for the gate in CI
+
+```python
+import time
+
+def wait_for_gate(owner, repo, sha, token, timeout=600, interval=30):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        result = get_pr_bouncer_status(owner, repo, sha, token)
+        if result in ("passed", "failed"):
+            return result
+        print(f"Gate status: {result} — waiting {interval}s...")
+        time.sleep(interval)
+    return "unknown"  # timed out
+```
+
 ## S3 Review Storage
 
 When `upload_to_s3: true`, pr-bouncer stores review data in S3 for long-term analysis. The purpose is to build an organizational dataset that a separate reporting tool can use to identify trends over time: which vulnerability types appear most often, which repos have recurring issues, whether the AI is consistently agreeing or disagreeing with static tools (signaling false positive/negative patterns), and where targeted developer training would have the most impact.
@@ -343,7 +417,7 @@ Ensure `GITHUB_TOKEN` has `pull-requests: write` permission. This is set in the 
 Make sure you've added the second workflow file (`.github/workflows/pr-bouncer-commands.yml`) to the repo. The commands workflow triggers on `issue_comment`, which is a separate event from `pull_request` — it needs its own workflow file.
 
 **`/accept-risk` doesn't unblock the PR**
-The command sets a status check called `security-analysis` to passing. If your branch protection uses a different check name, the override won't match. Verify the required check name in your branch protection rules.
+The command sets a status check called `pr-bouncer-analysis` to passing. If your branch protection uses a different check name, the override won't match. Verify the required check name in your branch protection rules.
 
 **S3 upload fails silently**
 The upload step only runs when `upload_to_s3: true` AND `review-result.json` exists. Check that AWS secrets are set at the org level or repo level and granted to your repo.
