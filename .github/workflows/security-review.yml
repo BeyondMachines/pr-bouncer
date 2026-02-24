@@ -39,6 +39,7 @@ permissions:
   contents: read
   pull-requests: write
   security-events: write
+  statuses: write
 
 jobs:
   security-analysis:
@@ -126,13 +127,20 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          RESULT="${{ steps.gate.outcome }}"   # 'success' or 'failure'
-          STATE=$([ "$RESULT" = "success" ] && echo "success" || echo "failure")
+          OUTCOME="${{ steps.gate.outcome }}"
+          STATE=$([ "$OUTCOME" = "success" ] && echo "success" || echo "failure")
+          SCORE=$(python3 -c "
+          import json
+          try: print(json.load(open('review-result.json')).get('risk_score','?'))
+          except: print('?')
+          ")
           SHA="${{ github.event.pull_request.head.sha }}"
-          gh api repos/${{ github.repository }}/statuses/$SHA \
+          gh api "repos/${{ github.repository }}/statuses/$SHA" \
+            --method POST \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
             -f state="$STATE" \
             -f context="security-analysis" \
-            -f description="Security gate: $STATE"
+            -f description="Security gate ${STATE} (risk score: ${SCORE}/10)"
 
       - name: Upload review to S3
         if: always() && inputs.upload_to_s3 && hashFiles('review-result.json') != ''
