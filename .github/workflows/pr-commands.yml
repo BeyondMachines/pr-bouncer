@@ -30,6 +30,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout pr-bouncer scripts
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/pr-bouncer
+          path: .pr-bouncer
+          ref: v1
+
       - name: Process command
         id: process
         env:
@@ -38,108 +45,14 @@ jobs:
           COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
           PR_NUMBER: ${{ github.event.issue.number }}
           REPO: ${{ github.repository }}
-        run: |
-          COMMAND=""
-          REASONING=""
-
-          if echo "$COMMENT_BODY" | grep -q "/accept-risk"; then
-            COMMAND="accept-risk"
-            REASONING=$(echo "$COMMENT_BODY" | sed 's|/accept-risk||' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-
-            gh pr comment "$PR_NUMBER" --repo "$REPO" \
-              --body "✅ **Risk accepted** by @${COMMENT_AUTHOR}.
-          
-          **Reason:** ${REASONING:-No reason provided.}
-          
-          The security gate has been overridden for this PR."
-
-            SHA=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefOid -q .headRefOid)
-            gh api repos/$REPO/statuses/$SHA \
-              -f state=success \
-              -f context="pr-bouncer-analysis" \
-              -f description="Risk accepted by $COMMENT_AUTHOR"
-
-          fi
-
-          if echo "$COMMENT_BODY" | grep -q "/false-positive"; then
-            COMMAND="false-positive"
-            REASONING=$(echo "$COMMENT_BODY" | sed 's|/false-positive||' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-
-            gh pr comment "$PR_NUMBER" --repo "$REPO" \
-              --body "📝 **False positive flagged** by @${COMMENT_AUTHOR}.
-          
-          **Reason:** ${REASONING:-No reason provided.}
-          
-          The security gate has been overridden for this PR."
-
-            SHA=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefOid -q .headRefOid)
-            gh api repos/$REPO/statuses/$SHA \
-              -f state=success \
-              -f context="pr-bouncer-analysis" \
-              -f description="False positive flagged by $COMMENT_AUTHOR"
-          fi
-
-          echo "command=$COMMAND" >> "$GITHUB_OUTPUT"
-          echo "reasoning=$REASONING" >> "$GITHUB_OUTPUT"
-          echo "author=$COMMENT_AUTHOR" >> "$GITHUB_OUTPUT"
-          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
-
-      - name: Save decision to S3
-        if: inputs.upload_to_s3 && steps.process.outputs.command != ''
-        env:
+          UPLOAD_TO_S3: ${{ inputs.upload_to_s3 }}
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
-          REPO: ${{ github.repository }}
-          COMMAND: ${{ steps.process.outputs.command }}
-          REASONING: ${{ steps.process.outputs.reasoning }}
-          AUTHOR: ${{ steps.process.outputs.author }}
-          PR_NUMBER: ${{ steps.process.outputs.pr_number }}
         run: |
           pip install boto3 -q
-          python3 << 'EOF'
-          import json, boto3, os
-          from datetime import datetime, timezone
+          python3 .pr-bouncer/scripts/process_command.py
 
-          now = datetime.now(timezone.utc)
-          repo = os.environ.get('REPO', 'unknown').replace('/', '__')
-          pr = os.environ.get('PR_NUMBER', '0')
-          command = os.environ.get('COMMAND', '')
-          author = os.environ.get('AUTHOR', '')
-          reasoning = os.environ.get('REASONING', '')
-          bucket = 'bm-pr-reviews'
-
-          decision = {
-              'type': command,
-              'repo': os.environ.get('REPO'),
-              'pr_number': int(pr),
-              'author': author,
-              'reasoning': reasoning,
-              'timestamp': now.isoformat(),
-          }
-
-          s3 = boto3.client('s3')
-
-          # Save individual decision
-          key = f"decisions/{now.year}/{now.month:02d}/{now.day:02d}/{repo}__PR-{pr}__{command}__{author}.json"
-          s3.put_object(
-              Bucket=bucket, Key=key,
-              Body=json.dumps(decision, indent=2),
-              ContentType='application/json'
-          )
-          print(f"Decision saved: {key}")
-
-          # Append to monthly decisions CSV
-          csv_key = f"decisions/{now.year}/{now.month:02d}.csv"
-          row = f"{now.isoformat()},{os.environ.get('REPO')},{pr},{command},{author},{reasoning}\n"
-
-          try:
-              existing = s3.get_object(Bucket=bucket, Key=csv_key)['Body'].read().decode()
-              if not existing.endswith('\n'):
-                  existing += '\n'
-          except s3.exceptions.NoSuchKey:
-              existing = "timestamp,repo,pr,decision,author,reasoning\n"
-
-          s3.put_object(Bucket=bucket, Key=csv_key, Body=existing + row, ContentType='text/csv')
-          print(f"Decision logged to {csv_key}")
-          EOF
+      - name: Cleanup action checkout
+        if: always()
+        run: rm -rf .pr-bouncer
