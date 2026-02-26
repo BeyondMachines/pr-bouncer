@@ -33,7 +33,7 @@ jobs:
       - name: Checkout pr-bouncer scripts
         uses: actions/checkout@v4
         with:
-          repository: ${{ github.repository_owner }}/pr-bouncer
+          repository: BeyondMachines/pr-bouncer
           path: .pr-bouncer
           ref: v1
 
