@@ -156,6 +156,7 @@ Set these per-repo in the `with:` block of your security review workflow.
 | `risk_threshold` | number | `7` | Risk score (1–10) at which the security gate fails. Lower = stricter. |
 | `semgrep_rules` | string | `p/security-audit,p/owasp-top-ten` | Comma-separated Semgrep rule sets. Add language-specific packs as needed. |
 | `upload_to_s3` | boolean | `false` | Upload review results to S3. Requires AWS secrets. |
+| `s3_bucket` | string | `bm-pr-reviews` | S3 bucket name for storing review results. The bucket must already exist — pr-bouncer does not create it. |
 
 ### Inputs — Slash Commands
 
@@ -164,6 +165,7 @@ Set these in the `with:` block of your commands workflow.
 | Input | Type | Default | Description |
 |---|---|---|---|
 | `upload_to_s3` | boolean | `false` | Save accept-risk and false-positive decisions to S3. |
+| `s3_bucket` | string | `bm-pr-reviews` | S3 bucket name for storing decisions. The bucket must already exist — pr-bouncer does not create it. |
 
 ### Full example with all options
 
@@ -184,6 +186,7 @@ jobs:
       risk_threshold: 5
       semgrep_rules: "p/security-audit,p/owasp-top-ten,p/python"
       upload_to_s3: true
+      s3_bucket: "my-company-pr-reviews"
     secrets:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -207,6 +210,7 @@ jobs:
     uses: BeyondMachines/pr-bouncer/.github/workflows/pr-commands.yml@v1
     with:
       upload_to_s3: true
+      s3_bucket: "my-company-pr-reviews"
     secrets:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -324,6 +328,8 @@ def wait_for_gate(owner, repo, sha, token, timeout=600, interval=30):
 
 When `upload_to_s3: true`, pr-bouncer stores review data in S3 for long-term analysis. The purpose is to build an organizational dataset that a separate reporting tool can use to identify trends over time: which vulnerability types appear most often, which repos have recurring issues, whether the AI is consistently agreeing or disagreeing with static tools (signaling false positive/negative patterns), and where targeted developer training would have the most impact.
 
+By default, data is stored in the `bm-pr-reviews` bucket. To use your own bucket, set `s3_bucket` in the `with:` block of both workflows. The bucket must already exist — pr-bouncer does not create it.
+
 ### What gets saved
 
 **Reviews** — saved by the security review workflow:
@@ -340,7 +346,7 @@ When `upload_to_s3: true`, pr-bouncer stores review data in S3 for long-term ana
 ### S3 bucket structure
 
 ```
-bm-pr-reviews/
+<your-bucket>/
 ├── reviews/
 │   └── YYYY/
 │       └── MM/
@@ -376,6 +382,7 @@ Reviews and decisions share the same repo/PR naming convention, so a reporting t
       risk_threshold: 3
       semgrep_rules: "p/security-audit,p/owasp-top-ten,p/python,p/django"
       upload_to_s3: true
+      s3_bucket: "my-company-pr-reviews"
 ```
 
 **Relaxed for an internal tool:**
