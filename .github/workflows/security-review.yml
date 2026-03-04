@@ -26,7 +26,7 @@ on:
         type: boolean
         default: false
       s3_bucket:
-        description: 'S3 bucket name for storing decisions'
+        description: 'S3 bucket name for storing decisions '
         required: false
         type: string
         default: 'bm-pr-reviews'
