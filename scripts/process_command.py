@@ -109,7 +109,7 @@ def save_to_s3(repo: str, pr: str, command: str, author: str, reasoning: str) ->
 
     now = datetime.now(timezone.utc)
     repo_key = repo.replace('/', '__')
-    bucket = 'bm-pr-reviews'
+    bucket = os.environ.get('S3_BUCKET', 'bm-pr-reviews')
 
     decision = {
         'type': command,

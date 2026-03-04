@@ -8,6 +8,11 @@ on:
         required: false
         type: boolean
         default: false
+      s3_bucket:
+        description: 'S3 bucket name for storing decisions'
+        required: false
+        type: string
+        default: 'bm-pr-reviews'
     secrets:
       AWS_ACCESS_KEY_ID:
         required: false
@@ -49,6 +54,7 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+          S3_BUCKET: ${{ inputs.s3_bucket }}
         run: |
           pip install boto3 -q
           python3 .pr-bouncer/scripts/process_command.py

@@ -25,6 +25,11 @@ on:
         required: false
         type: boolean
         default: false
+      s3_bucket:
+        description: 'S3 bucket name for storing decisions'
+        required: false
+        type: string
+        default: 'bm-pr-reviews'
     secrets:
       GEMINI_API_KEY:
         required: true
@@ -162,7 +167,7 @@ jobs:
           repo = os.environ.get('REPO_NAME', 'unknown').replace('/', '__')
           pr = os.environ.get('PR_NUMBER', '0')
           sha = os.environ.get('GITHUB_SHA', 'unknown')[:8]
-          bucket = 'bm-pr-reviews'
+          bucket = os.environ.get('S3_BUCKET', 'bm-pr-reviews')
 
           with open('review-result.json') as f:
               review = json.load(f)
