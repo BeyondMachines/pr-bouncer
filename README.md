@@ -23,14 +23,26 @@ Most existing tools fall into one of two camps: commercial platforms with per-se
 ## How It Works
 
 ```
-PR Opened → Semgrep + Gitleaks + Checkov → Gemini AI Review → PR Comment + Security Gate
+PR Opened → Semgrep + Gitleaks + Checkov → Diff Classification → Gemini AI Review → PR Comment + Security Gate
 ```
 
 1. **Semgrep** — code-level vulnerabilities (injection, auth issues, OWASP Top 10)
 2. **Gitleaks** — hardcoded secrets and credentials
 3. **Checkov** — infrastructure misconfigurations (Dockerfiles, Terraform, Kubernetes)
-4. **Gemini AI** — evaluates each finding against the actual code, flags false positives, computes a composite risk score
-5. **Security Gate** — blocks the PR if the risk score exceeds your threshold or any critical issues are confirmed
+4. **Diff Classification** — each finding is classified as **NEW** (introduced by the PR) or **EXISTING** (pre-existing in changed files) based on which lines the PR actually added or modified
+5. **Gemini AI** — evaluates each finding against the actual code, with NEW and EXISTING findings presented separately. Computes a risk score based only on NEW findings.
+6. **Security Gate** — blocks the PR only if the NEW risk score exceeds your threshold or any NEW critical issues are confirmed. Pre-existing issues are reported as informational context.
+
+### New vs Existing Finding Separation (v2)
+
+In v1, static tools scanned entire changed files and all findings were treated equally — a pre-existing `DEBUG = True` on line 1 could block your PR even if you only added a comment on line 200. This caused false gate failures and eroded developer trust.
+
+In v2, pr-bouncer parses the PR diff to determine exactly which lines were added or modified. Each tool finding is then classified:
+
+- **NEW** — the finding is on a line that was added or modified by the PR (within a proximity window of 5 lines to account for tool reporting quirks). These findings determine the security gate.
+- **EXISTING** — the finding is on a line that existed before the PR. These are shown as informational context but do not block the merge.
+
+Both the static tool results and the Gemini AI review carry this classification. The PR comment clearly separates new issues (prominent, blocking) from existing ones (collapsible, informational), and the security gate only acts on new findings.
 
 ---
 
@@ -69,7 +81,7 @@ on:
 
 jobs:
   security-review:
-    uses: BeyondMachines/pr-bouncer/.github/workflows/security-review.yml@v1
+    uses: BeyondMachines/pr-bouncer/.github/workflows/security-review.yml@v2
     secrets:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 ```
@@ -88,7 +100,7 @@ on:
 jobs:
   security-review:
     if: github.event.pull_request.head.repo.full_name == github.repository
-    uses: BeyondMachines/pr-bouncer/.github/workflows/security-review.yml@v1
+    uses: BeyondMachines/pr-bouncer/.github/workflows/security-review.yml@v2
     secrets:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 ```
@@ -115,7 +127,7 @@ jobs:
     if: >
       github.event.issue.pull_request &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
-    uses: BeyondMachines/pr-bouncer/.github/workflows/pr-commands.yml@v1
+    uses: BeyondMachines/pr-bouncer/.github/workflows/pr-commands.yml@v2
     with:
       upload_to_s3: true    # save decisions to S3 (default: false)
     secrets:
@@ -145,6 +157,30 @@ When combined with slash commands, developers can unblock a failed gate by comme
 
 ---
 
+## Migrating from v1 to v2
+
+The only change required in consuming repos is updating the tag reference:
+
+```yaml
+# Before (v1)
+uses: BeyondMachines/pr-bouncer/.github/workflows/security-review.yml@v1
+
+# After (v2)
+uses: BeyondMachines/pr-bouncer/.github/workflows/security-review.yml@v2
+```
+
+All inputs, secrets, and workflow filenames remain the same. No other changes are needed.
+
+**What changes in behavior:**
+- The security gate now only blocks on findings introduced by the PR, not pre-existing issues in changed files.
+- The PR comment separates new and existing findings into distinct sections.
+- The commit status description shows both scores: `Security gate success (new: 3/10, existing: 6/10)`.
+- If you consume S3 data downstream, the `tokens/` CSV has a new `existing_risk_score` column and the `scan-results.json` structure changed from 3 keys to 6 (see S3 section below).
+
+**v1 remains available.** Repos that don't update their tag will continue running v1 with no changes.
+
+---
+
 ## Configuration Reference
 
 ### Inputs — Security Review
@@ -153,7 +189,7 @@ Set these per-repo in the `with:` block of your security review workflow.
 
 | Input | Type | Default | Description |
 |---|---|---|---|
-| `risk_threshold` | number | `7` | Risk score (1–10) at which the security gate fails. Lower = stricter. |
+| `risk_threshold` | number | `7` | Risk score (1–10) at which the security gate fails. In v2, this applies only to the NEW findings score. Lower = stricter. |
 | `semgrep_rules` | string | `p/security-audit,p/owasp-top-ten` | Comma-separated Semgrep rule sets. Add language-specific packs as needed. |
 | `upload_to_s3` | boolean | `false` | Upload review results to S3. Requires AWS secrets. |
 | `s3_bucket` | string | `bm-pr-reviews` | S3 bucket name for storing review results. The bucket must already exist — pr-bouncer does not create it. |
@@ -181,7 +217,7 @@ jobs:
   security-review:
     # Optional: uncomment the next line for public repos to block fork PRs
     # if: github.event.pull_request.head.repo.full_name == github.repository
-    uses: BeyondMachines/pr-bouncer/.github/workflows/security-review.yml@v1
+    uses: BeyondMachines/pr-bouncer/.github/workflows/security-review.yml@v2
     with:
       risk_threshold: 5
       semgrep_rules: "p/security-audit,p/owasp-top-ten,p/python"
@@ -207,7 +243,7 @@ jobs:
     if: >
       github.event.issue.pull_request &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
-    uses: BeyondMachines/pr-bouncer/.github/workflows/pr-commands.yml@v1
+    uses: BeyondMachines/pr-bouncer/.github/workflows/pr-commands.yml@v2
     with:
       upload_to_s3: true
       s3_bucket: "my-company-pr-reviews"
@@ -223,12 +259,15 @@ jobs:
 
 pr-bouncer posts a single comment on each PR with:
 
-- **Risk Score** (1–10) with color indicator (🟢 🟡 🔴)
-- **Critical Issues** — confirmed vulnerabilities with file, line, description, and fix
-- **Disputed Findings** — where the AI disagrees with a static tool finding, with reasoning
+- **Risk Score** (1–10) with color indicator (🟢 🟡 🔴) — based only on NEW findings
+- **Scan Summary** — total findings split into NEW (introduced by PR) and EXISTING (pre-existing)
+- **Raw Tool Findings** — collapsible section with all Semgrep, Gitleaks, and Checkov results, separated into NEW and EXISTING blocks
+- **Critical Issues (NEW)** — confirmed vulnerabilities introduced by this PR, with file, line, description, and fix. These block the merge.
+- **Pre-existing Issues** — collapsible section showing confirmed vulnerabilities that existed before the PR, for informational context
+- **Disputed Findings** — where the AI disagrees with a static tool finding, with reasoning and scope label
 - **Breaking Changes** — database migrations, removed endpoints, changed API signatures
 - **Recommendations** — top 3 actionable security improvements
-- **Raw Tool Findings** — collapsible section with all Semgrep, Gitleaks, and Checkov results
+- **Pre-existing Risk Score** — informational score for existing issues (does not affect the gate)
 - **Actions** — slash commands for developers to accept risk or flag false positives
 
 ---
@@ -237,16 +276,28 @@ pr-bouncer posts a single comment on each PR with:
 
 The gate blocks the PR if:
 
-- Risk score ≥ `risk_threshold` (default 7), **OR**
-- Any critical issues are confirmed
+- **NEW** risk score ≥ `risk_threshold` (default 7), **OR**
+- Any **NEW** critical issues are confirmed
+
+Pre-existing findings are reported but never block the gate. If the pre-existing risk score is 5 or higher, a warning note is printed in the workflow log.
 
 The risk score is a **composite** of the static tool findings and the AI evaluation:
 
-- If both tools and AI agree something is risky → high score
-- If tools flag something but AI identifies it as a false positive → dampened score
-- If AI finds something tools missed → AI score is used
+- If both tools and AI agree something new is risky → high score
+- If tools flag something new but AI identifies it as a false positive → dampened score
+- If AI finds something new that tools missed → AI score is used
+- If tools flag something existing → it goes to `existing_risk_score` only
 
 If slash commands are enabled, a developer can override a failed gate by commenting `/accept-risk` with their reasoning. This sets the status check to passing while recording who accepted the risk and why.
+
+### How findings are classified
+
+pr-bouncer parses the unified diff (`git diff`) to extract exactly which line numbers were added or modified in each file. Each static tool finding is then classified:
+
+- **NEW** — the finding's line number falls within 5 lines of an added/modified line in the same file. The proximity window accounts for tools that report issues a few lines away from the actual change (e.g. flagging a function signature when the body changed).
+- **EXISTING** — the finding's line number is more than 5 lines from any added/modified line, or the file had no changes in the diff at all.
+
+Both the raw tool findings and the Gemini AI evaluation carry this classification throughout the pipeline.
 
 ---
 
@@ -260,7 +311,9 @@ This is the standard Actions job result. It appears in the PR merge box, links t
 **Commit status** — `pr-bouncer-analysis`
 This is an explicit status posted by pr-bouncer at the end of every run. It is readable via the standard Statuses API on all GitHub plans, including free organizations. This is the signal intended for any automation that needs to know whether the security gate passed or failed.
 
-The two signals inisially always agree — the commit status reflects the outcome of the Actions gate step.
+In v2, the commit status description includes both scores for visibility: `Security gate success (new: 3/10, existing: 6/10)`.
+
+The two signals initially always agree — the commit status reflects the outcome of the Actions gate step.
 
 ### Reading the gate result from automation
 
@@ -274,11 +327,11 @@ Look for the entry where `context` is `pr-bouncer-analysis`. The `state` field w
 
 | State | Meaning |
 |---|---|
-| `success` | Security gate passed — PR is safe to merge |
-| `failure` | Security gate failed — critical issues or risk score too high |
+| `success` | Security gate passed — no NEW critical issues or risk score below threshold |
+| `failure` | Security gate failed — NEW critical issues or NEW risk score too high |
 | `pending` | Review is still running |
 
-The `description` field contains the risk score for quick reference, e.g. `Security gate failure (risk score: 7/10)`.
+The `description` field contains both risk scores for quick reference, e.g. `Security gate success (new: 3/10, existing: 6/10)`.
 
 #### Example — polling from a script
 
@@ -336,8 +389,8 @@ By default, data is stored in the `bm-pr-reviews` bucket. To use your own bucket
 
 | Condition | What's saved |
 |---|---|
-| Risk score ≥ 5 | Full review: all critical issues, finding evaluations, recommendations, breaking changes, PR metadata, token usage |
-| Risk score < 5 | Summary only: risk score, one-line summary, issue/recommendation counts, PR metadata, token usage |
+| Risk score ≥ 5 | Full review: all critical issues (with scope), finding evaluations (with scope), recommendations, breaking changes, PR metadata, token usage, both risk scores |
+| Risk score < 5 | Summary only: both risk scores, one-line summary, new/existing issue counts, PR metadata, token usage |
 
 **Token usage** — always logged regardless of risk score. Every review appends a row to a monthly CSV for monitoring API costs across repos.
 
@@ -365,11 +418,20 @@ By default, data is stored in the `bm-pr-reviews` bucket. To use your own bucket
         └── MM.csv    # monthly token usage (one row per review)
 ```
 
-The `tokens/` CSVs have columns: `timestamp, repo, pr, risk_score, prompt_tokens, completion_tokens, cached_tokens, total_tokens`.
+The `tokens/` CSVs have columns: `timestamp, repo, pr, risk_score, existing_risk_score, prompt_tokens, completion_tokens, cached_tokens, total_tokens`.
 
 The `decisions/` CSVs have columns: `timestamp, repo, pr, decision, author, reasoning`.
 
 Reviews and decisions share the same repo/PR naming convention, so a reporting tool can join them to see how often findings are accepted vs fixed vs disputed.
+
+### Changes from v1
+
+The v2 S3 format has two differences from v1:
+
+1. **`tokens/` CSV** — new `existing_risk_score` column added after `risk_score`.
+2. **Review JSON** — `finding_evaluations` and `critical_issues` entries now include a `scope` field (`"NEW"` or `"EXISTING"`), and a top-level `existing_risk_score` field is present.
+
+If you have downstream tooling that parses the S3 data, update it to handle the new column and fields.
 
 ---
 
@@ -377,7 +439,7 @@ Reviews and decisions share the same repo/PR naming convention, so a reporting t
 
 **Strict security for a production API:**
 ```yaml
-    uses: BeyondMachines/pr-bouncer/.github/workflows/security-review.yml@v1
+    uses: BeyondMachines/pr-bouncer/.github/workflows/security-review.yml@v2
     with:
       risk_threshold: 3
       semgrep_rules: "p/security-audit,p/owasp-top-ten,p/python,p/django"
@@ -415,7 +477,10 @@ However, **no defense against prompt injection is foolproof**. A sufficiently cr
 The Gemini API call failed. Check the workflow logs for the "Run Gemini PR Review" step. Common causes: invalid API key, rate limiting, or the prompt exceeded the context window.
 
 **Gate fails but the review looks clean**
-The composite score may be elevated by static tool findings even if the AI downgraded them. Lower `risk_threshold` or check the raw findings section for what triggered the tools.
+The composite score may be elevated by static tool findings even if the AI downgraded them. Lower `risk_threshold` or check the raw findings section for what triggered the tools. In v2, make sure you're looking at the NEW findings section — existing findings no longer affect the gate.
+
+**Pre-existing issues showing as NEW**
+The classification uses a proximity window of 5 lines. If you modified a line very close to a pre-existing issue, it may get classified as NEW. This is by design — if you're touching code right next to a vulnerability, it's relevant to your PR.
 
 **Review comment not appearing**
 Ensure `GITHUB_TOKEN` has `pull-requests: write` permission. This is set in the reusable workflow's `permissions` block, but org-level policies can override it.
