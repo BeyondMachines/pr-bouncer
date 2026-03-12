@@ -115,16 +115,26 @@ jobs:
           fi
 
           SCORE=$(python3 -c "import json; print(json.load(open('review-result.json'))['risk_score'])")
-          CRITICAL=$(python3 -c "import json; print(len(json.load(open('review-result.json')).get('critical_issues', [])))")
+          EXISTING_SCORE=$(python3 -c "import json; print(json.load(open('review-result.json')).get('existing_risk_score', 0))")
+          CRITICAL=$(python3 -c "
+          import json
+          issues = json.load(open('review-result.json')).get('critical_issues', [])
+          new_critical = [i for i in issues if i.get('scope', 'NEW') == 'NEW']
+          print(len(new_critical))
+          ")
 
-          echo "Risk score: $SCORE/10 (threshold: $RISK_THRESHOLD)"
-          echo "Critical issues: $CRITICAL"
+          echo "Risk score (new findings): $SCORE/10 (threshold: $RISK_THRESHOLD)"
+          echo "Risk score (existing findings): $EXISTING_SCORE/10 (informational)"
+          echo "Critical NEW issues: $CRITICAL"
 
           if [ "$SCORE" -ge "$RISK_THRESHOLD" ] || [ "$CRITICAL" -gt 0 ]; then
-            echo "❌ Security gate FAILED — PR is blocked"
+            echo "❌ Security gate FAILED — PR is blocked (based on NEW findings only)"
             exit 1
           else
             echo "✅ Security gate passed"
+            if [ "$EXISTING_SCORE" -ge 5 ]; then
+              echo "⚠️ Note: pre-existing issues detected (score: $EXISTING_SCORE/10) — consider addressing them"
+            fi
           fi
 
       - name: Post commit status as pr-bouncer-analysis for automation
@@ -139,13 +149,18 @@ jobs:
           try: print(json.load(open('review-result.json')).get('risk_score','?'))
           except: print('?')
           ")
+          EXISTING_SCORE=$(python3 -c "
+          import json
+          try: print(json.load(open('review-result.json')).get('existing_risk_score','?'))
+          except: print('?')
+          ")
           SHA="${{ github.event.pull_request.head.sha }}"
           gh api "repos/${{ github.repository }}/statuses/$SHA" \
             --method POST \
             -H "Authorization: Bearer $GITHUB_TOKEN" \
             -f state="$STATE" \
             -f context="pr-bouncer-analysis" \
-            -f description="Security gate ${STATE} (risk score: ${SCORE}/10)"
+            -f description="Security gate ${STATE} (new: ${SCORE}/10, existing: ${EXISTING_SCORE}/10)"
 
       - name: Upload review to S3
         if: always() && inputs.upload_to_s3 && hashFiles('review-result.json') != ''
@@ -174,6 +189,7 @@ jobs:
               review = json.load(f)
 
           risk = review.get('risk_score', 0)
+          existing_risk = review.get('existing_risk_score', 0)
 
           envelope = {
               'metadata': {
@@ -206,8 +222,10 @@ jobs:
                   'metadata': envelope['metadata'],
                   'review_summary': {
                       'risk_score': risk,
+                      'existing_risk_score': existing_risk,
                       'summary': review.get('summary', ''),
-                      'critical_count': len(review.get('critical_issues', [])),
+                      'critical_count': len([i for i in review.get('critical_issues', []) if i.get('scope', 'NEW') == 'NEW']),
+                      'existing_critical_count': len([i for i in review.get('critical_issues', []) if i.get('scope') == 'EXISTING']),
                       'recommendation_count': len(review.get('recommendations', [])),
                   }
               }
@@ -221,14 +239,14 @@ jobs:
 
           usage = envelope['metadata']['token_usage']
           csv_key = f"tokens/{now.year}/{now.month:02d}.csv"
-          row = f"{now.isoformat()},{repo},{pr},{risk},{usage.get('prompt_tokens',0)},{usage.get('completion_tokens',0)},{usage.get('cached_tokens',0)},{usage.get('total_tokens',0)}\n"
+          row = f"{now.isoformat()},{repo},{pr},{risk},{existing_risk},{usage.get('prompt_tokens',0)},{usage.get('completion_tokens',0)},{usage.get('cached_tokens',0)},{usage.get('total_tokens',0)}\n"
 
           try:
               existing = s3.get_object(Bucket=bucket, Key=csv_key)['Body'].read().decode()
               if not existing.endswith('\n'):
                   existing += '\n'
           except s3.exceptions.NoSuchKey:
-              existing = "timestamp,repo,pr,risk_score,prompt_tokens,completion_tokens,cached_tokens,total_tokens\n"
+              existing = "timestamp,repo,pr,risk_score,existing_risk_score,prompt_tokens,completion_tokens,cached_tokens,total_tokens\n"
 
           s3.put_object(Bucket=bucket, Key=csv_key, Body=existing + row, ContentType='text/csv')
           print(f"Token usage logged")
