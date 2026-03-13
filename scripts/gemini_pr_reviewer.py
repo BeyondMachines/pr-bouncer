@@ -86,6 +86,21 @@ SECURITY_REVIEW_SCHEMA = {
                 },
             },
         },
+        "existing_code_issues": {
+            "type": "ARRAY",
+            "description": "Security issues found by YOUR OWN independent review of pre-existing code in changed files — issues that the static tools did NOT flag. Focus on logic bugs, missing auth, IDOR, broken access control, and other issues that pattern-matching tools typically miss.",
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "title":          {"type": "STRING"},
+                    "file":           {"type": "STRING"},
+                    "line":           {"type": "INTEGER"},
+                    "severity":       {"type": "STRING", "enum": ["CRITICAL", "HIGH", "MEDIUM", "LOW"]},
+                    "description":    {"type": "STRING"},
+                    "recommendation": {"type": "STRING"}
+                },
+            },
+        },
         "breaking_changes": {
             "type": "ARRAY",
             "description": "Changes that could break production.",
@@ -771,26 +786,41 @@ Guidelines:
    - For each issue, explain *why* it is dangerous based on the Reference Map.
    - Only include an EXISTING finding here if the PR makes it newly reachable or worse.
 
-3. **Check Reachability:** Look at the `Impact Analysis` section.
+3. **existing_code_issues**: Independently review the FULL FILE CONTEXT of all changed files
+   and identify security issues in PRE-EXISTING code that the static tools DID NOT catch.
+   Focus on issues that pattern-matching tools typically miss:
+   - Missing authentication or authorization checks on endpoints
+   - IDOR (Insecure Direct Object Reference) — accessing resources without ownership checks
+   - Broken access control — admin endpoints without role checks
+   - Business logic flaws — race conditions, insecure workflows
+   - Information leakage — verbose error messages, exposed internal state
+   - Missing input validation beyond what tools flag
+   - Insecure default configurations
+   
+   Do NOT duplicate findings already covered by `finding_evaluations`. Only list issues
+   the tools missed. Include file, line, severity, description, and recommendation for each.
+
+4. **Check Reachability:** Look at the `Impact Analysis` section.
    - If a changed function is called by safe code (tests, internal scripts), DOWNGRADE the risk.
    - If called by public endpoints, UPGRADE the risk.
    - If NOT called anywhere, mark as "Dead Code" (Low Risk).
 
-4. **Check Controls:** Look at the `Security Context` section for each file.
+5. **Check Controls:** Look at the `Security Context` section for each file.
    - Does the file import authentication libraries? Are functions decorated with `@login_required`?
    - Does it import dangerous modules (`subprocess`, `os`, `pickle`)?
 
-5. **breaking_changes**: Database migrations, removed endpoints, changed public API signatures, removed env vars.
+6. **breaking_changes**: Database migrations, removed endpoints, changed public API signatures, removed env vars.
 
-6. **recommendations**: Max 3, actionable, security-focused. Plain text only, no code blocks.
+7. **recommendations**: Max 3, actionable, security-focused. Plain text only, no code blocks.
 
-7. **risk_score**: 1-10 based on NEW findings ONLY. 1 = no new issues, 10 = critical new secrets or RCE.
+8. **risk_score**: 1-10 based on NEW findings ONLY. 1 = no new issues, 10 = critical new secrets or RCE.
 
-8. **existing_risk_score**: 1-10 based on EXISTING findings. Informational only.
+9. **existing_risk_score**: 1-10 based on ALL existing issues — both tool findings AND your independent
+   `existing_code_issues` review. Informational only.
 
-9. **summary**: One sentence covering both new and existing posture.
+10. **summary**: One sentence covering both new and existing posture.
 
-10. **FALSE POSITIVE PREVENTION (MANDATORY):** For every potential vulnerability:
+11. **FALSE POSITIVE PREVENTION (MANDATORY):** For every potential vulnerability:
    a. Read the FULL FILE context, not just the diff hunk.
    b. Read the Project Security Configuration section.
    c. If you find a mitigation in the surrounding code or config, analyze it.
@@ -972,8 +1002,12 @@ Be thorough on critical_issues — list every confirmed NEW vulnerability. Be co
                 md += f"{icon} **[{priority}]** {rec.get('suggestion', '')}\n\n"
 
         # --- Existing findings AI evaluation (collapsible) ---
+        # --- Existing findings AI evaluation (collapsible) ---
         existing_evals = [e for e in evals if e.get('scope') == 'EXISTING']
-        if existing_evals:
+        ai_found_existing = review.get('existing_code_issues', [])
+        has_existing_content = existing_evals or ai_found_existing
+
+        if has_existing_content:
             if existing_score <= 3:
                 ex_icon = "🟢"
             elif existing_score <= 6:
@@ -983,30 +1017,44 @@ Be thorough on critical_issues — list every confirmed NEW vulnerability. Be co
 
             md += f"---\n\n## {ex_icon} Pre-existing Code Review — Score: {existing_score}/10\n\n"
             md += "These findings existed before this PR. They are **informational only** and do not affect the security gate.\n\n"
-            md += "<details>\n<summary>📋 AI Evaluation of Pre-existing Findings (click to expand)</summary>\n\n"
 
-            # Group by verdict for readability
-            confirmed_existing = [e for e in existing_evals if e.get('ai_verdict') in ('CONFIRMED', 'LIKELY')]
-            dismissed_existing = [e for e in existing_evals if e.get('ai_verdict') in ('UNLIKELY', 'FALSE_POSITIVE')]
+            # --- AI-independent findings (not from tools) ---
+            if ai_found_existing:
+                md += "<details>\n<summary>🧠 AI-Identified Pre-existing Issues (click to expand)</summary>\n\n"
+                md += "Security issues found by AI review of existing code that static tools did not flag:\n\n"
+                for issue in ai_found_existing:
+                    sev = issue.get('severity', 'MEDIUM')
+                    sev_icon = {"CRITICAL": "🔴", "HIGH": "🟠", "MEDIUM": "🟡", "LOW": "🔵"}.get(sev, "🟡")
+                    md += f"### {sev_icon} [{sev}] `{issue.get('file', '?')}:{issue.get('line', '?')}` — {issue.get('title', 'Issue')}\n\n"
+                    md += f"{issue.get('description', '')}\n\n"
+                    md += f"**Fix:** {issue.get('recommendation', 'N/A')}\n\n"
+                md += "</details>\n\n"
 
-            if confirmed_existing:
-                md += "#### Confirmed Pre-existing Issues\n\n"
-                for e in confirmed_existing:
-                    sev = e.get('ai_severity', 'MEDIUM')
-                    sev_icon = {"CRITICAL": "🔴", "HIGH": "🟠", "MEDIUM": "🟡", "LOW": "🔵", "NONE": "⚪"}.get(sev, "🟡")
-                    md += (f"- {sev_icon} **[{sev}]** `{e.get('file')}:{e.get('line')}` "
-                           f"— {e.get('tool')}/{e.get('rule')}\n"
-                           f"  - **Verdict:** {e.get('ai_verdict')} | **Tool severity:** {e.get('tool_severity', '?')}\n"
-                           f"  - {e.get('ai_reasoning', 'No reasoning provided.')}\n\n")
+            # --- Tool finding confirmations ---
+            if existing_evals:
+                md += "<details>\n<summary>📋 AI Evaluation of Pre-existing Tool Findings (click to expand)</summary>\n\n"
 
-            if dismissed_existing:
-                md += "#### Dismissed Pre-existing Findings\n\n"
-                for e in dismissed_existing:
-                    md += (f"- ⚪ `{e.get('file')}:{e.get('line')}` "
-                           f"— {e.get('tool')}/{e.get('rule')}\n"
-                           f"  - **Verdict:** {e.get('ai_verdict')}: {e.get('ai_reasoning', '')}\n\n")
+                confirmed_existing = [e for e in existing_evals if e.get('ai_verdict') in ('CONFIRMED', 'LIKELY')]
+                dismissed_existing = [e for e in existing_evals if e.get('ai_verdict') in ('UNLIKELY', 'FALSE_POSITIVE')]
 
-            md += "</details>\n\n"
+                if confirmed_existing:
+                    md += "#### Confirmed Pre-existing Issues\n\n"
+                    for e in confirmed_existing:
+                        sev = e.get('ai_severity', 'MEDIUM')
+                        sev_icon = {"CRITICAL": "🔴", "HIGH": "🟠", "MEDIUM": "🟡", "LOW": "🔵", "NONE": "⚪"}.get(sev, "🟡")
+                        md += (f"- {sev_icon} **[{sev}]** `{e.get('file')}:{e.get('line')}` "
+                               f"— {e.get('tool')}/{e.get('rule')}\n"
+                               f"  - **Verdict:** {e.get('ai_verdict')} | **Tool severity:** {e.get('tool_severity', '?')}\n"
+                               f"  - {e.get('ai_reasoning', 'No reasoning provided.')}\n\n")
+
+                if dismissed_existing:
+                    md += "#### Dismissed Pre-existing Findings\n\n"
+                    for e in dismissed_existing:
+                        md += (f"- ⚪ `{e.get('file')}:{e.get('line')}` "
+                               f"— {e.get('tool')}/{e.get('rule')}\n"
+                               f"  - **Verdict:** {e.get('ai_verdict')}: {e.get('ai_reasoning', '')}\n\n")
+
+                md += "</details>\n\n"
         elif existing_score and existing_score > 1:
             # No evaluations but there is an existing score (edge case)
             if existing_score <= 3:
