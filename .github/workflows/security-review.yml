@@ -67,7 +67,7 @@ jobs:
         with:
           repository: BeyondMachines/pr-bouncer
           path: .pr-bouncer
-          ref: feat/adding-split-review-for-current-new-code
+          ref: v1
 
       - name: Set up Python
         uses: actions/setup-python@v5
