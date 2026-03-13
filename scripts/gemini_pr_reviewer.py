@@ -971,8 +971,44 @@ Be thorough on critical_issues — list every confirmed NEW vulnerability. Be co
                 icon = {"HIGH": "🔥", "MEDIUM": "⚡", "LOW": "ℹ️"}.get(priority, "ℹ️")
                 md += f"{icon} **[{priority}]** {rec.get('suggestion', '')}\n\n"
 
-        # --- Existing risk score ---
-        if existing_score and existing_score > 1:
+        # --- Existing findings AI evaluation (collapsible) ---
+        existing_evals = [e for e in evals if e.get('scope') == 'EXISTING']
+        if existing_evals:
+            if existing_score <= 3:
+                ex_icon = "🟢"
+            elif existing_score <= 6:
+                ex_icon = "🟡"
+            else:
+                ex_icon = "🔴"
+
+            md += f"---\n\n## {ex_icon} Pre-existing Code Review — Score: {existing_score}/10\n\n"
+            md += "These findings existed before this PR. They are **informational only** and do not affect the security gate.\n\n"
+            md += "<details>\n<summary>📋 AI Evaluation of Pre-existing Findings (click to expand)</summary>\n\n"
+
+            # Group by verdict for readability
+            confirmed_existing = [e for e in existing_evals if e.get('ai_verdict') in ('CONFIRMED', 'LIKELY')]
+            dismissed_existing = [e for e in existing_evals if e.get('ai_verdict') in ('UNLIKELY', 'FALSE_POSITIVE')]
+
+            if confirmed_existing:
+                md += "#### Confirmed Pre-existing Issues\n\n"
+                for e in confirmed_existing:
+                    sev = e.get('ai_severity', 'MEDIUM')
+                    sev_icon = {"CRITICAL": "🔴", "HIGH": "🟠", "MEDIUM": "🟡", "LOW": "🔵", "NONE": "⚪"}.get(sev, "🟡")
+                    md += (f"- {sev_icon} **[{sev}]** `{e.get('file')}:{e.get('line')}` "
+                           f"— {e.get('tool')}/{e.get('rule')}\n"
+                           f"  - **Verdict:** {e.get('ai_verdict')} | **Tool severity:** {e.get('tool_severity', '?')}\n"
+                           f"  - {e.get('ai_reasoning', 'No reasoning provided.')}\n\n")
+
+            if dismissed_existing:
+                md += "#### Dismissed Pre-existing Findings\n\n"
+                for e in dismissed_existing:
+                    md += (f"- ⚪ `{e.get('file')}:{e.get('line')}` "
+                           f"— {e.get('tool')}/{e.get('rule')}\n"
+                           f"  - **Verdict:** {e.get('ai_verdict')}: {e.get('ai_reasoning', '')}\n\n")
+
+            md += "</details>\n\n"
+        elif existing_score and existing_score > 1:
+            # No evaluations but there is an existing score (edge case)
             if existing_score <= 3:
                 ex_icon = "🟢"
             elif existing_score <= 6:
@@ -980,6 +1016,7 @@ Be thorough on critical_issues — list every confirmed NEW vulnerability. Be co
             else:
                 ex_icon = "🔴"
             md += f"---\n\n{ex_icon} **Pre-existing risk score:** {existing_score}/10 (informational, does not affect gate)\n\n"
+
 
         md += "\n---\n"
         md += "### Actions\n\n"
